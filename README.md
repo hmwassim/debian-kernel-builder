@@ -45,6 +45,7 @@ Install with `sudo dpkg -i output/*.deb`.
 | `scheduler` | `cfs`, `eevdf`, `bore`, `pds`, `bmq` | `cfs` needs `kernel_version < 6.6`, `eevdf` needs `>= 6.6` |
 | `jobs` | number, or empty | Empty = `nproc` |
 | `localversion` | string | Appended to the package version, e.g. `-custom` |
+| `verify_signature` | `no` (default) or `yes` | Verify the kernel.org tarball against its PGP signature before building. `yes` needs `gpg` and a reachable keyserver on first run to import the release-signing keys |
 
 ### CPU names
 
@@ -60,6 +61,13 @@ an older GCC/Clang), the build fails with GCC's own "bad value" error for
 
 ## Caveats worth knowing before you script this into a habit
 
+- **Reruns reuse the source tree, and the applied patches stick.** `work/src`
+  persists between runs (see stage 1), so changing the `scheduler` in the
+  middle of a series of builds leaves the previous scheduler's patch applied
+  to a reused tree; the build then errors out on the patch apply. Fix it by
+  wiping the workspace: `rm -rf work/` (and `output/` if you want the debs
+  rebuilt too). Keeping the same config between runs is fine - already
+  applied patches are detected and skipped.
 - **Patch coverage is real, not automatic.** CachyOS publishes scheduler
   patches per kernel major.minor branch as they cut them - a brand new point
   release may not have a `bore`/`pds`/`bmq` patch yet even if the kernel
