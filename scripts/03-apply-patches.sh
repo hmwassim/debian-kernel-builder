@@ -11,15 +11,18 @@ fi
 
 cd "$SRC_DIR"
 
-# work/src persists across runs (see 01-fetch-source.sh), so a rerun with
-# the same scheduler hits a tree that's already patched. `patch` detects
-# that and exits 1 ("previously applied"), which used to be treated as a
-# hard failure. Dry-run first to tell "already applied" apart from a
-# genuine mismatch.
-if patch -Np1 --fuzz=0 --dry-run -i "$PATCH_FILE" &>/dev/null </dev/null; then
+# work/src persists across runs (see 01-fetch-source.sh and build.sh's
+# kernel_version:scheduler fingerprint, which doesn't cover every field -
+# e.g. changing hz/preempt/trim_modules/cpu/localversion, or just retrying
+# after an unrelated failure, reuses the same already-patched tree). Plain
+# `patch` exits 1 on an already-applied patch ("previously applied"), and
+# without --batch/closed stdin it can also stall waiting on a tty for
+# "Assume -R?". Dry-run first to tell "already applied" apart from a
+# genuine mismatch, and keep stdin closed on every invocation.
+if patch -Np1 --fuzz=0 --batch --dry-run -i "$PATCH_FILE" &>/dev/null </dev/null; then
     echo "==> Applying scheduler patch ($scheduler)"
-    patch -Np1 --fuzz=0 -i "$PATCH_FILE" </dev/null
-elif patch -Np1 --fuzz=0 -R --dry-run -i "$PATCH_FILE" &>/dev/null </dev/null; then
+    patch -Np1 --fuzz=0 --batch -i "$PATCH_FILE" </dev/null
+elif patch -Np1 --fuzz=0 --batch -R --dry-run -i "$PATCH_FILE" &>/dev/null </dev/null; then
     echo "==> Scheduler patch ($scheduler) already applied, skipping"
 else
     echo "ERROR: patch failed to apply cleanly against kernel $kernel_version." >&2

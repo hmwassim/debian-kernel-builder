@@ -22,6 +22,13 @@ case "$scheduler" in
             echo "ERROR: scheduler=cfs requires kernel_version < 6.6 (got $kernel_version)." >&2
             exit 1
         fi
+        # A previous run may have left a bore/pds/bmq patch file here from a
+        # different scheduler choice. build.sh only wipes work/src when
+        # kernel_version/scheduler changes - it doesn't touch work/patches -
+        # so without this, 03-apply-patches.sh would find that stale file
+        # and apply someone else's scheduler patch onto this run's freshly
+        # extracted, supposedly-unpatched tree.
+        rm -f "$PATCH_DIR/scheduler.patch"
         echo "==> cfs is the kernel's own scheduler on $kernel_version, no patch needed"
         ;;
     eevdf)
@@ -29,6 +36,8 @@ case "$scheduler" in
             echo "ERROR: scheduler=eevdf requires kernel_version >= 6.6 (got $kernel_version)." >&2
             exit 1
         fi
+        # See the cfs branch above - same stale-patch hazard applies here.
+        rm -f "$PATCH_DIR/scheduler.patch"
         echo "==> eevdf is the kernel's default on $kernel_version, no patch needed"
         ;;
     bore)
