@@ -50,6 +50,23 @@ case "$scheduler" in
         ;;
 esac
 
+ver_num() { local M="${1%%.*}" m="${1#*.}"; printf '%d%03d' "$M" "$m"; }
+MAJOR_MINOR="$(echo "$kernel_version" | cut -d. -f1,2)"
+
+# ---- NTSYNC (https://docs.kernel.org/next/userspace-api/ntsync.html) -----
+# Mainlined in kernel 6.14 - just a Kconfig toggle, no patch needed. Adds
+# /dev/ntsync, used by Wine/Proton (Wine 11+, Proton 11+) for NT-style
+# synchronization primitives. Not hardware- or device-specific, and inert
+# unless something actually opens the device - so unlike scheduler/hz/
+# preempt this isn't a kbuild.conf choice, it's enabled unconditionally
+# whenever the kernel version supports it.
+if (( $(ver_num "$MAJOR_MINOR") >= $(ver_num 6.14) )); then
+    echo "==> Enabling NTSYNC (CONFIG_NTSYNC)"
+    scripts/config -e NTSYNC
+else
+    echo "==> Skipping NTSYNC: needs kernel_version >= 6.14 (got $kernel_version)"
+fi
+
 # ---- sched-ext (https://github.com/sched-ext/scx) -----------------------
 # Fully upstreamed since kernel 6.12 - just Kconfig, no patch needed.
 # This is what lets scx_* BPF schedulers (and tools like scx-switcher) run
@@ -57,8 +74,6 @@ esac
 # extra scheduling class. PDS/BMQ replace the core scheduler class
 # structure that sched-ext's fallback path expects, so the combination is
 # untested here - if you use pds/bmq, treat sched-ext support as best-effort.
-ver_num() { local M="${1%%.*}" m="${1#*.}"; printf '%d%03d' "$M" "$m"; }
-MAJOR_MINOR="$(echo "$kernel_version" | cut -d. -f1,2)"
 if (( $(ver_num "$MAJOR_MINOR") >= $(ver_num 6.12) )); then
     echo "==> Enabling sched-ext (CONFIG_SCHED_CLASS_EXT and friends)"
     scripts/config \

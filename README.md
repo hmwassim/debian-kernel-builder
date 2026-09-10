@@ -34,8 +34,8 @@ sudo dpkg -i output/*.deb
    that kernel's major.minor branch. `cfs` and `eevdf` need no patch.
 3. **Configure** - starts from `/boot/config-$(uname -r)` if present,
    otherwise `make defconfig`; sets the scheduler, tick rate, and
-   preemption model via `scripts/config`; enables sched-ext support on
-   `kernel_version >= 6.12`.
+   preemption model via `scripts/config`; enables NTSYNC on
+   `kernel_version >= 6.14` and sched-ext support on `kernel_version >= 6.12`.
 4. **Build** - runs `make bindeb-pkg` with `KCFLAGS=-march=<cpu>` and
    collects the resulting `.deb` files into `output/`.
 
@@ -61,6 +61,15 @@ All settings are in `kbuild.conf`.
 `-march=x86-64-v3` (a safe modern baseline), `native` becomes `-march=native`,
 and any other value is passed through as `-march=<value>` - so
 `rocketlake`, `znver4`, `alderlake`, `x86-64-v4`, etc. are all valid.
+
+### NTSYNC
+
+[NTSYNC](https://docs.kernel.org/next/userspace-api/ntsync.html)
+(`CONFIG_NTSYNC`, mainlined in kernel 6.14, used by Wine 11+/Proton 11+)
+is enabled unconditionally whenever `kernel_version >= 6.14` - it's not a
+`kbuild.conf` field because it's not hardware- or preference-dependent,
+just a device node (`/dev/ntsync`) that sits idle unless something opens
+it, so there's nothing to weigh.
 
 ### sched-ext
 
