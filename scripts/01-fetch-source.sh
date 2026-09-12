@@ -59,10 +59,38 @@ if [[ "${verify_signature:-yes}" == "yes" ]]; then
     # signers - see https://kernel.org/signature.html. Import once.
     LINUS_KEY="79BE3E4300411886"
     GREGKH_KEY="38DBBDC86092693E"
-    gpg --list-keys "$LINUS_KEY" &>/dev/null || \
-        gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys "$LINUS_KEY"
-    gpg --list-keys "$GREGKH_KEY" &>/dev/null || \
-        gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys "$GREGKH_KEY"
+
+    # kernel.org publishes WKD (Web Key Directory) for its own developers -
+    # see docs.kernel.org/process/maintainer-pgp-guide.html - so try that
+    # first: it's kernel.org's own recommended method and doesn't depend on
+    # the old SKS keyserver network, which has become unreliable ("No data"
+    # for keys that genuinely exist, timeouts, keyservers that are simply
+    # gone). Only fall back to public keyservers if WKD doesn't have it.
+    fetch_key() {
+        local KEY_ID="$1" EMAIL="$2"
+        gpg --list-keys "$KEY_ID" &>/dev/null && return 0
+        echo "    trying WKD ($EMAIL)..."
+        gpg --quiet --auto-key-locate wkd --locate-keys "$EMAIL" &>/dev/null && \
+            gpg --list-keys "$KEY_ID" &>/dev/null && return 0
+        local KS
+        for KS in hkps://keyserver.ubuntu.com hkps://keys.openpgp.org hkps://pgp.mit.edu; do
+            echo "    trying $KS..."
+            gpg --keyserver "$KS" --recv-keys "$KEY_ID" &>/dev/null && return 0
+        done
+        return 1
+    }
+
+    echo "==> Fetching release-signing keys"
+    fetch_key "$LINUS_KEY" torvalds@kernel.org || {
+        echo "ERROR: could not fetch Linus Torvalds' key ($LINUS_KEY) via WKD or any keyserver." >&2
+        echo "This is usually transient (keyserver/network hiccup) - try again, or set verify_signature=\"no\" in kbuild.conf to skip." >&2
+        exit 1
+    }
+    fetch_key "$GREGKH_KEY" gregkh@kernel.org || {
+        echo "ERROR: could not fetch Greg Kroah-Hartman's key ($GREGKH_KEY) via WKD or any keyserver." >&2
+        echo "This is usually transient (keyserver/network hiccup) - try again, or set verify_signature=\"no\" in kbuild.conf to skip." >&2
+        exit 1
+    }
 
     echo "==> Verifying tarball signature"
     if ! xz -cd "$WORK_DIR/$TARBALL" | gpg --verify "$WORK_DIR/$SIGFILE" -; then

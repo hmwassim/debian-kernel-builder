@@ -60,9 +60,18 @@ MAJOR_MINOR="$(echo "$kernel_version" | cut -d. -f1,2)"
 # unless something actually opens the device - so unlike scheduler/hz/
 # preempt this isn't a kbuild.conf choice, it's enabled unconditionally
 # whenever the kernel version supports it.
+#
+# Built as a MODULE (-m), not built-in (-e): debforge's wine.yaml
+# (github.com/hmwassim/debforge) drops
+# /etc/modules-load.d/10-ntsync.conf expecting to `modprobe ntsync` at
+# boot via systemd-modules-load.service. Built-in would make that
+# modprobe fail every boot (module not found, since it's already
+# compiled in) - harmless to booting, but a spurious failed unit. As a
+# module, the modprobe succeeds and debforge's udev rule
+# (KERNEL=="ntsync", MODE="0644") still fires the same way either way.
 if (( $(ver_num "$MAJOR_MINOR") >= $(ver_num 6.14) )); then
-    echo "==> Enabling NTSYNC (CONFIG_NTSYNC)"
-    scripts/config -e NTSYNC
+    echo "==> Enabling NTSYNC as a module (CONFIG_NTSYNC=m)"
+    scripts/config -m NTSYNC
 else
     echo "==> Skipping NTSYNC: needs kernel_version >= 6.14 (got $kernel_version)"
 fi
