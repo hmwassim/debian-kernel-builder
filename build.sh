@@ -34,7 +34,7 @@ run_as_user() {
         "$@"
     else
         sudo -u "$TARGET_USER" -H \
-            --preserve-env=ROOT_DIR,WORK_DIR,OUTPUT_DIR,kernel_version,cpu,scheduler,jobs,localversion,hz,preempt,trim_modules,verify_signature \
+            --preserve-env=ROOT_DIR,WORK_DIR,OUTPUT_DIR,kernel_version,cpu,scheduler,jobs,localversion,hz,preempt,trim_modules,verify_signature,gaming_tweaks,acs_override \
             "$@"
     fi
 }
@@ -57,15 +57,21 @@ hz="${hz:-250}"
 preempt="${preempt:-lazy}"
 trim_modules="${trim_modules:-no}"
 verify_signature="${verify_signature:-yes}"
+gaming_tweaks="${gaming_tweaks:-yes}"
+acs_override="${acs_override:-no}"
+manage_io_schedulers="${manage_io_schedulers:-yes}"
 
 echo "==> debian-kernel-builder"
-echo "    kernel_version = $kernel_version"
-echo "    cpu            = $cpu"
-echo "    scheduler      = $scheduler"
-echo "    hz / preempt   = $hz / $preempt"
-echo "    trim_modules   = $trim_modules"
-echo "    jobs           = $jobs"
-echo "    building as    = $TARGET_USER"
+echo "    kernel_version  = $kernel_version"
+echo "    cpu             = $cpu"
+echo "    scheduler       = $scheduler"
+echo "    hz / preempt    = $hz / $preempt"
+echo "    trim_modules    = $trim_modules"
+echo "    gaming_tweaks   = $gaming_tweaks"
+echo "    acs_override    = $acs_override"
+echo "    manage_io_sched = $manage_io_schedulers"
+echo "    jobs            = $jobs"
+echo "    building as     = $TARGET_USER"
 
 # ---- dependencies ----------------------------------------------------------
 # Checked rather than unconditionally reinstalled, so a second run doesn't
@@ -96,20 +102,20 @@ for d in "$WORK_DIR" "$OUTPUT_DIR"; do
     fi
 done
 
-# If kernel_version or scheduler changed since the last run, the extracted
-# source in work/src is stale (or already patched for a different
-# scheduler) - wipe it so stage 1/2/3 start clean instead of silently
-# applying a new patch on top of an old tree.
+# If kernel_version, scheduler, or patch selections changed since the last
+# run, the extracted source in work/src is stale (or already patched for a
+# different set of options) - wipe it so stage 1/2/3 start clean.
 FINGERPRINT_FILE="$WORK_DIR/.kbuild-fingerprint"
-FINGERPRINT="${kernel_version}:${scheduler}"
+FINGERPRINT="${kernel_version}:${scheduler}:${gaming_tweaks}:${acs_override}"
 if [[ -f "$FINGERPRINT_FILE" ]] && [[ "$(cat "$FINGERPRINT_FILE")" != "$FINGERPRINT" ]]; then
-    echo "==> kernel_version/scheduler changed since the last build, cleaning work/src"
+    echo "==> Configuration or patches changed since the last build, cleaning work/src"
     rm -rf "$WORK_DIR/src"
 fi
 echo "$FINGERPRINT" > "$FINGERPRINT_FILE"
 
 export ROOT_DIR WORK_DIR OUTPUT_DIR kernel_version cpu scheduler jobs localversion \
-       hz preempt trim_modules verify_signature
+       hz preempt trim_modules verify_signature gaming_tweaks acs_override \
+       manage_io_schedulers
 
 run_as_user "$ROOT_DIR/scripts/01-fetch-source.sh"
 run_as_user "$ROOT_DIR/scripts/02-fetch-patches.sh"
@@ -141,6 +147,13 @@ if [[ ${#INSTALL_DEBS[@]} -eq 0 ]]; then
     exit 1
 fi
 apt-get install -y "${INSTALL_DEBS[@]}"
+
+# Runs as root directly (not via run_as_user) - it writes to /etc and
+# reloads live udev state, not work/ or output/. See the script itself for
+# why this exists: 04-configure.sh builds BFQ/Kyber as modules so they
+# don't fight debforge's modprobe-based setup, and this is what actually
+# loads and assigns them when debforge isn't there to do it instead.
+"$ROOT_DIR/scripts/06-postinstall.sh"
 
 echo "==> Done and installed. Packages in: $OUTPUT_DIR"
 ls -1 "$OUTPUT_DIR"

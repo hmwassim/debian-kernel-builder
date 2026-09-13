@@ -29,6 +29,19 @@ scripts/config --set-str SYSTEM_TRUSTED_KEYS "" \
                --set-str SYSTEM_REVOCATION_KEYS "" \
                --set-str MODULE_SIG_KEY "certs/signing_key.pem"
 
+# DRM_PANIC_SCREEN_QR_CODE (the QR-code kernel-panic screen) depends on
+# CONFIG_RUST, which this tool doesn't set up (needs a pinned rustc +
+# bindgen - not worth it for a panic screen). If the inherited baseline
+# .config has DRM_PANIC_SCREEN="qr_code" from a stock kernel that did have
+# Rust enabled, that string carries over as-is (Kconfig doesn't validate
+# it against RUST/DRM_PANIC_SCREEN_QR_CODE - they're unrelated symbol
+# types), so the kernel would silently fall back to "user" at boot with a
+# dmesg warning. Reset it to what we can actually build.
+if grep -q '^CONFIG_DRM_PANIC_SCREEN="qr_code"$' .config 2>/dev/null; then
+    echo "==> DRM_PANIC_SCREEN=qr_code needs Rust support this build doesn't have, resetting to 'user'"
+    scripts/config --set-str DRM_PANIC_SCREEN user
+fi
+
 # ---- Scheduler ---------------------------------------------------------
 # cpu tuning is handled as a compiler -march flag at build time (stage 5)
 # instead of Kconfig, since the per-microarch CPU options (GENERIC_CPU,
@@ -53,22 +66,9 @@ esac
 ver_num() { local M="${1%%.*}" m="${1#*.}"; printf '%d%03d' "$M" "$m"; }
 MAJOR_MINOR="$(echo "$kernel_version" | cut -d. -f1,2)"
 
-# ---- NTSYNC (https://docs.kernel.org/next/userspace-api/ntsync.html) -----
-# Mainlined in kernel 6.14 - just a Kconfig toggle, no patch needed. Adds
-# /dev/ntsync, used by Wine/Proton (Wine 11+, Proton 11+) for NT-style
-# synchronization primitives. Not hardware- or device-specific, and inert
-# unless something actually opens the device - so unlike scheduler/hz/
-# preempt this isn't a kbuild.conf choice, it's enabled unconditionally
-# whenever the kernel version supports it.
-#
-# Built as a MODULE (-m), not built-in (-e): debforge's wine.yaml
-# (github.com/hmwassim/debforge) drops
-# /etc/modules-load.d/10-ntsync.conf expecting to `modprobe ntsync` at
-# boot via systemd-modules-load.service. Built-in would make that
-# modprobe fail every boot (module not found, since it's already
-# compiled in) - harmless to booting, but a spurious failed unit. As a
-# module, the modprobe succeeds and debforge's udev rule
-# (KERNEL=="ntsync", MODE="0644") still fires the same way either way.
+# ---- NTSYNC (kernel >= 6.14, no kbuild.conf toggle - just a version gate) -
+# Module, not built-in: debforge's wine.yaml modprobes it at boot; built-in
+# would make that modprobe fail. See README > debforge compatibility.
 if (( $(ver_num "$MAJOR_MINOR") >= $(ver_num 6.14) )); then
     echo "==> Enabling NTSYNC as a module (CONFIG_NTSYNC=m)"
     scripts/config -m NTSYNC
@@ -76,41 +76,40 @@ else
     echo "==> Skipping NTSYNC: needs kernel_version >= 6.14 (got $kernel_version)"
 fi
 
-# ---- sched-ext (https://github.com/sched-ext/scx) -----------------------
-# Fully upstreamed since kernel 6.12 - just Kconfig, no patch needed.
-# This is what lets scx_* BPF schedulers (and tools like scx-switcher) run
-# on the resulting kernel; it coexists with cfs/eevdf/bore as a pluggable
-# extra scheduling class. PDS/BMQ replace the core scheduler class
-# structure that sched-ext's fallback path expects, so the combination is
-# untested here - if you use pds/bmq, treat sched-ext support as best-effort.
+# ---- sched-ext (kernel >= 6.12) - lets scx_* BPF schedulers run -----------
+# Config list per https://github.com/sched-ext/scx/blob/main/kernel.config.
+# pds/bmq replace the core scheduler class sched-ext expects, so treat that
+# combination as best-effort.
 if (( $(ver_num "$MAJOR_MINOR") >= $(ver_num 6.12) )); then
     echo "==> Enabling sched-ext (CONFIG_SCHED_CLASS_EXT and friends)"
     scripts/config \
         -e BPF -e BPF_SYSCALL -e BPF_JIT \
         -e DEBUG_INFO -e DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT -e DEBUG_INFO_BTF \
         -e BPF_JIT_ALWAYS_ON -e BPF_JIT_DEFAULT_ON \
-        -e SCHED_CLASS_EXT
-    # Checked directly against sched-ext's own required-config list
-    # (https://github.com/sched-ext/scx/blob/main/kernel.config):
-    #   - KALLSYMS_ALL: needed by some Rust schedulers, e.g. scx_p2dq.
-    #   - FUNCTION_TRACER: scx_lavd uses ftrace to track futex calls for its
-    #     lock-holder preemption avoidance, falling back to a tracepoint if
-    #     ftrace isn't built - a soft dependency, but cheap to enable.
-    #   - IKCONFIG/IKCONFIG_PROC: exposes the running kernel's config at
-    #     /proc/config.gz, handy for confirming these options actually made
-    #     it into the kernel you booted.
-    # Deliberately NOT pulling in the rest of that upstream file - things
-    # like DEBUG_LOCKDEP/PROVE_LOCKING/full PREEMPT/kprobes/uprobes are
-    # scx's own CI/test-coverage config, not requirements for running scx
-    # schedulers, and carry real runtime overhead that has no place in a
-    # kernel meant to actually be used day to day.
-    scripts/config -e KALLSYMS_ALL -e FUNCTION_TRACER -e IKCONFIG -e IKCONFIG_PROC
+        -e SCHED_CLASS_EXT \
+        -e KALLSYMS_ALL -e FUNCTION_TRACER -e IKCONFIG -e IKCONFIG_PROC
     if [[ "$scheduler" == "pds" || "$scheduler" == "bmq" ]]; then
         echo "    NOTE: sched-ext + $scheduler is untested - core scheduler is replaced by $scheduler"
     fi
 else
     echo "==> Skipping sched-ext: needs kernel_version >= 6.12 (got $kernel_version)"
 fi
+
+# ---- Gaming tweaks: THP + legacy GCN amdgpu support ----------------------
+if [[ "${gaming_tweaks:-no}" == "yes" ]]; then
+    echo "==> Setting Transparent Hugepages to always (CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS)"
+    scripts/config -e TRANSPARENT_HUGEPAGE_ALWAYS -d TRANSPARENT_HUGEPAGE_MADVISE
+
+    echo "==> Enabling AMD GCN 1.0/1.1 support in amdgpu (CONFIG_DRM_AMDGPU_SI / CIK)"
+    scripts/config -e DRM_AMDGPU_SI -e DRM_AMDGPU_CIK
+fi
+
+# ---- Interactive I/O schedulers ------------------------------------------
+# Modules, not built-in, same reason as NTSYNC above. BFQ_GROUP_IOSCHED
+# stays -e: it's a bool, not tristate, so it just rides along with BFQ.
+# See README > debforge compatibility, and manage_io_schedulers/
+# 06-postinstall.sh for what actually loads/assigns them at install time.
+scripts/config -m IOSCHED_BFQ -e BFQ_GROUP_IOSCHED -m MQ_IOSCHED_KYBER
 
 make olddefconfig
 

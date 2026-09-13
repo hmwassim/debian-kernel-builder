@@ -15,8 +15,14 @@ case "$cpu" in
 esac
 echo "==> CPU target: -march=$MARCH"
 
+KCFLAGS_VAL="-march=$MARCH"
+if [[ "${gaming_tweaks:-no}" == "yes" ]]; then
+    echo "==> Enabling AMD private color (-DAMD_PRIVATE_COLOR)"
+    KCFLAGS_VAL="$KCFLAGS_VAL -DAMD_PRIVATE_COLOR"
+fi
+
 echo "==> Building (this takes a while) - $jobs job(s), LOCALVERSION=$localversion"
-make -j"$jobs" KCFLAGS="-march=$MARCH" bindeb-pkg LOCALVERSION="$localversion"
+make -j"$jobs" KCFLAGS="$KCFLAGS_VAL" bindeb-pkg LOCALVERSION="$localversion"
 
 # bindeb-pkg drops the .deb files one directory above the source tree
 cd "$WORK_DIR"
