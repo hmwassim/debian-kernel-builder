@@ -8,7 +8,10 @@ Automated, non-interactive kernel build tool for Debian 13 (Trixie). Edit
 - Debian 13 (Trixie), x86_64
 - Root or sudo access for `--install-deps` and package installation
 - ~15-25 GB free disk space and 20-60+ minutes per build, depending on
-  configuration and hardware
+  configuration and hardware. `lto="full"` (see
+  [Toolchain and LTO](#toolchain-and-lto)) is meaningfully slower and more
+  RAM-hungry than the default - it's a single-threaded link step, not a
+  parallel one.
 
 ## Usage
 
@@ -51,6 +54,8 @@ All settings are in `kbuild.conf`.
 |---|---|---|
 | `kernel_version` | e.g. `7.2.2` | Must be a real kernel.org release |
 | `cpu` | `generic`, `native`, or any GCC/Clang `-march` name | See [CPU targeting](#cpu-targeting) |
+| `toolchain` | `gcc`, `clang` | See [Toolchain and LTO](#toolchain-and-lto); default `gcc` |
+| `lto` | `none`, `thin`, `full` | Only valid with `toolchain="clang"`; see [Toolchain and LTO](#toolchain-and-lto); default `none` |
 | `scheduler` | `cfs`, `eevdf`, `bore`, `pds`, `bmq` | `cfs` requires `kernel_version < 6.6`; `eevdf` requires `>= 6.6` |
 | `jobs` | number, or empty | Empty uses `nproc` |
 | `localversion` | string | Appended to the package version, e.g. `-custom` |
@@ -69,6 +74,52 @@ All settings are in `kbuild.conf`.
 `-march=x86-64-v3` (a safe modern baseline), `native` becomes `-march=native`,
 and any other value is passed through as `-march=<value>` - so
 `rocketlake`, `znver4`, `alderlake`, `x86-64-v4`, etc. are all valid.
+
+### Toolchain and LTO
+
+`toolchain="gcc"` (the default) builds exactly as this project always has.
+`toolchain="clang"` builds with Clang/LLVM instead - Debian Trixie ships
+`clang`, `lld`, and `llvm` as unversioned metapackages all pinned to the
+same LLVM release (19 as of Trixie's initial release), so `apt install
+clang lld llvm` on a stock Trixie system is enough; no third-party repo
+needed. `build.sh` installs these automatically when `toolchain="clang"`
+is set, same as any other missing dependency.
+
+`lto` controls Link-Time Optimization and is **only meaningful with
+`toolchain="clang"`** - the kernel's LTO support
+(`CONFIG_LTO_CLANG_THIN`/`CONFIG_LTO_CLANG_FULL`) is Clang-specific, there
+is no equivalent GCC Kconfig path. Setting `lto` to anything but `"none"`
+while `toolchain="gcc"` is a hard error at configure time, not a silent
+no-op.
+
+- `none` - no LTO (default)
+- `thin` - `CONFIG_LTO_CLANG_THIN`: a parallelized link, most of the
+  benefit of LTO for a fraction of the build time and RAM of full
+- `full` - `CONFIG_LTO_CLANG_FULL`: a single-threaded link, slower and
+  meaningfully more RAM-hungry, but the most aggressive cross-file
+  optimization available
+
+Both stages that invoke `make` against the kernel tree (`04-configure.sh`
+and `05-compile.sh`) pass `LLVM=1` when `toolchain="clang"` - the kernel's
+own "use the whole LLVM toolchain" switch (`clang`, `ld.lld`,
+`llvm-ar`/`nm`/`objcopy`/...), applied consistently rather than setting
+individual tool variables. This matters because `CONFIG_CC_IS_CLANG` is
+recomputed by Kconfig fresh on every `make` invocation from whichever
+compiler it actually resolves at that moment - if `LLVM=1` were only
+passed to the compile step and not the earlier config-generation step (or
+vice versa), the LTO choice would silently fall back to `LTO_NONE` rather
+than failing. `04-configure.sh` also verifies after the final
+`olddefconfig` that `CONFIG_CC_IS_CLANG` and the requested
+`CONFIG_LTO_*` symbol actually stuck, the same defensive pattern used for
+[preempt](#preemption-model) - if Clang isn't actually detected (missing
+binary, broken `update-alternatives`), the build fails loudly instead of
+quietly shipping a non-LTO kernel while claiming otherwise.
+
+Not included: AutoFDO and Propeller (the profile-guided optimization
+CachyOS's default kernel uses) are a fundamentally different, iterative
+workflow - build an instrumented kernel, run it under real workloads to
+collect a profile, then rebuild against that profile - not a
+`kbuild.conf` toggle, and this project doesn't implement it.
 
 ### NTSYNC
 
@@ -170,7 +221,11 @@ alphabetical order with full idempotence (skips already-applied patches on retri
 This is intentionally smaller than [linux-tkg](https://github.com/Frogging-Family/linux-tkg):
 
 - **ccache** - not wired in.
-- **Clang/LLVM/ThinLTO builds** - always builds with GCC.
+- **AutoFDO / Propeller** - the profile-guided optimization CachyOS's
+  default kernel uses. See [Toolchain and LTO](#toolchain-and-lto) - this
+  is an iterative build-profile-rebuild workflow, not a config toggle, and
+  isn't implemented here. Clang and LTO (thin/full) *are* supported via
+  `toolchain`/`lto` - see that section.
 - **Runtime-switchable tuning** - `preempt`, `hz`, and `scheduler` are
   compile-time choices, not `CONFIG_PREEMPT_DYNAMIC`-style boot-time toggles.
 

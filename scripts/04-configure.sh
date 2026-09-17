@@ -4,12 +4,33 @@ set -euo pipefail
 SRC_DIR="$WORK_DIR/src"
 cd "$SRC_DIR"
 
+# ---- Toolchain (GCC vs Clang/LLVM) ----------------------------------------
+# Decided before the very first config generation, not bolted on later:
+# CONFIG_CC_IS_CLANG is computed fresh by Kconfig from whichever compiler
+# $(CC) resolves to on each individual `make` invocation, so every make
+# call against this tree - here and in stage 5 - needs the same LLVM=1 or
+# CC_IS_CLANG silently comes back unset and any LTO_CLANG_* choice below
+# gets dropped back to LTO_NONE by olddefconfig, the same silent-fallback
+# failure mode the hz/preempt checks further down guard against, just one
+# step earlier. LLVM=1 is the kernel's own "use the whole LLVM toolchain"
+# switch (clang, ld.lld, llvm-ar/nm/objcopy/...) rather than setting each
+# tool individually.
+case "${toolchain:-gcc}" in
+    gcc)   TOOLCHAIN_ARGS=() ;;
+    clang) TOOLCHAIN_ARGS=(LLVM=1) ;;
+    *)
+        echo "ERROR: toolchain must be 'gcc' or 'clang' (got '${toolchain:-}')." >&2
+        exit 1
+        ;;
+esac
+echo "==> Toolchain: ${toolchain:-gcc}"
+
 echo "==> Preparing baseline .config"
 if [[ -f "/boot/config-$(uname -r)" ]]; then
     cp "/boot/config-$(uname -r)" .config
-    make olddefconfig
+    make "${TOOLCHAIN_ARGS[@]}" olddefconfig
 else
-    make defconfig
+    make "${TOOLCHAIN_ARGS[@]}" defconfig
 fi
 
 # ---- Module list trimming ------------------------------------------------
@@ -18,7 +39,7 @@ fi
 if [[ "${trim_modules:-no}" == "yes" ]]; then
     echo "==> Trimming module list to what's currently loaded (localmodconfig)"
     lsmod > "$WORK_DIR/lsmod.txt"
-    yes "" | make LSMOD="$WORK_DIR/lsmod.txt" localmodconfig
+    yes "" | make "${TOOLCHAIN_ARGS[@]}" LSMOD="$WORK_DIR/lsmod.txt" localmodconfig
 fi
 
 # Debian's shipped /boot config points signing options at Debian-specific
@@ -62,6 +83,35 @@ case "$scheduler" in
         : # nothing to toggle, this is the kernel's own default for the range
         ;;
 esac
+
+# ---- Link-Time Optimization (Clang only) ----------------------------------
+# CONFIG_LTO_CLANG_THIN/FULL only exist under HAS_LTO_CLANG (requires
+# CC_IS_CLANG) - there's no GCC equivalent Kconfig path, so lto is only
+# meaningful when toolchain=clang. Caught here rather than left to fail
+# deep in the build, same as the other case-validated fields in this file.
+lto="${lto:-none}"
+if [[ "${toolchain:-gcc}" == "clang" ]]; then
+    case "$lto" in
+        none)
+            scripts/config -e LTO_NONE -d LTO_CLANG_THIN -d LTO_CLANG_FULL
+            ;;
+        thin)
+            echo "==> Enabling ThinLTO (CONFIG_LTO_CLANG_THIN)"
+            scripts/config -d LTO_NONE -e LTO_CLANG_THIN -d LTO_CLANG_FULL
+            ;;
+        full)
+            echo "==> Enabling full LTO (CONFIG_LTO_CLANG_FULL) - single-threaded link, slow and RAM-hungry"
+            scripts/config -d LTO_NONE -d LTO_CLANG_THIN -e LTO_CLANG_FULL
+            ;;
+        *)
+            echo "ERROR: lto must be 'none', 'thin', or 'full' (got '$lto')." >&2
+            exit 1
+            ;;
+    esac
+elif [[ "$lto" != "none" ]]; then
+    echo "ERROR: lto=\"$lto\" requires toolchain=\"clang\" - GCC has no kernel LTO support." >&2
+    exit 1
+fi
 
 ver_num() { local M="${1%%.*}" m="${1#*.}"; printf '%d%03d' "$M" "$m"; }
 MAJOR_MINOR="$(echo "$kernel_version" | cut -d. -f1,2)"
@@ -111,7 +161,7 @@ fi
 # 06-postinstall.sh for what actually loads/assigns them at install time.
 scripts/config -m IOSCHED_BFQ -e BFQ_GROUP_IOSCHED -m MQ_IOSCHED_KYBER
 
-make olddefconfig
+make "${TOOLCHAIN_ARGS[@]}" olddefconfig
 
 # ---- Timer tick rate (CONFIG_HZ) -----------------------------------------
 echo "==> Setting tick rate: ${hz}Hz"
@@ -142,7 +192,7 @@ case "$preempt" in
         ;;
 esac
 
-make olddefconfig
+make "${TOOLCHAIN_ARGS[@]}" olddefconfig
 
 # Belt-and-braces alongside the preempt check below: HZ_100/250/300/1000
 # carry no `depends on` on any arch this project targets, so this should
@@ -159,6 +209,28 @@ if ! grep -q "^CONFIG_${WANT_PREEMPT}=y" .config; then
     echo "ERROR: preempt=$preempt (CONFIG_$WANT_PREEMPT) did not stick after olddefconfig." >&2
     echo "This kernel_version/arch combination may not support it." >&2
     exit 1
+fi
+
+# Same silent-fallback risk as preempt above, one layer deeper: if Clang
+# somehow isn't detected (missing binary, broken update-alternatives),
+# CONFIG_CC_IS_CLANG comes back unset and every LTO_CLANG_* choice quietly
+# reverts to LTO_NONE instead of failing loudly.
+if [[ "${toolchain:-gcc}" == "clang" ]]; then
+    if ! grep -q "^CONFIG_CC_IS_CLANG=y" .config; then
+        echo "ERROR: toolchain=clang but Kconfig didn't detect Clang (CONFIG_CC_IS_CLANG unset)." >&2
+        echo "Check that clang/lld/llvm are installed and 'clang --version' works." >&2
+        exit 1
+    fi
+    case "$lto" in
+        none) WANT_LTO=LTO_NONE ;;
+        thin) WANT_LTO=LTO_CLANG_THIN ;;
+        full) WANT_LTO=LTO_CLANG_FULL ;;
+    esac
+    if ! grep -q "^CONFIG_${WANT_LTO}=y" .config; then
+        echo "ERROR: lto=$lto (CONFIG_$WANT_LTO) did not stick after olddefconfig." >&2
+        echo "This kernel_version/arch combination may not support it." >&2
+        exit 1
+    fi
 fi
 
 echo "==> Config ready"

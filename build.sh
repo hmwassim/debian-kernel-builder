@@ -34,7 +34,7 @@ run_as_user() {
         "$@"
     else
         sudo -u "$TARGET_USER" -H \
-            --preserve-env=ROOT_DIR,WORK_DIR,OUTPUT_DIR,kernel_version,cpu,scheduler,jobs,localversion,hz,preempt,trim_modules,verify_signature,gaming_tweaks,acs_override \
+            --preserve-env=ROOT_DIR,WORK_DIR,OUTPUT_DIR,kernel_version,cpu,toolchain,lto,scheduler,jobs,localversion,hz,preempt,trim_modules,verify_signature,gaming_tweaks,acs_override \
             "$@"
     fi
 }
@@ -51,6 +51,8 @@ source "$CONF_FILE"
 : "${kernel_version:?kernel_version must be set in kbuild.conf}"
 : "${cpu:?cpu must be set in kbuild.conf}"
 : "${scheduler:?scheduler must be set in kbuild.conf}"
+toolchain="${toolchain:-gcc}"
+lto="${lto:-none}"
 jobs="${jobs:-$(nproc)}"
 localversion="${localversion:--custom}"
 hz="${hz:-250}"
@@ -64,6 +66,8 @@ manage_io_schedulers="${manage_io_schedulers:-yes}"
 echo "==> debian-kernel-builder"
 echo "    kernel_version  = $kernel_version"
 echo "    cpu             = $cpu"
+echo "    toolchain       = $toolchain"
+echo "    lto             = $lto"
 echo "    scheduler       = $scheduler"
 echo "    hz / preempt    = $hz / $preempt"
 echo "    trim_modules    = $trim_modules"
@@ -79,6 +83,12 @@ echo "    building as     = $TARGET_USER"
 DEPS=(build-essential debhelper libncurses-dev bison flex libssl-dev
       libelf-dev libdw-dev bc dwarves git wget patch rsync kmod cpio
       fakeroot python3 gnupg xz-utils)
+# clang/lld/llvm are unversioned metapackages - Trixie pins all three to
+# the same LLVM release (19 as of Trixie's initial release) so there's no
+# mixed-version linker/compiler risk. Only pulled in when actually needed.
+if [[ "$toolchain" == "clang" ]]; then
+    DEPS+=(clang lld llvm)
+fi
 MISSING=()
 for pkg in "${DEPS[@]}"; do
     dpkg -s "$pkg" &>/dev/null || MISSING+=("$pkg")
@@ -113,8 +123,8 @@ if [[ -f "$FINGERPRINT_FILE" ]] && [[ "$(cat "$FINGERPRINT_FILE")" != "$FINGERPR
 fi
 echo "$FINGERPRINT" > "$FINGERPRINT_FILE"
 
-export ROOT_DIR WORK_DIR OUTPUT_DIR kernel_version cpu scheduler jobs localversion \
-       hz preempt trim_modules verify_signature gaming_tweaks acs_override \
+export ROOT_DIR WORK_DIR OUTPUT_DIR kernel_version cpu toolchain lto scheduler jobs \
+       localversion hz preempt trim_modules verify_signature gaming_tweaks acs_override \
        manage_io_schedulers
 
 run_as_user "$ROOT_DIR/scripts/01-fetch-source.sh"
