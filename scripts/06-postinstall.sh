@@ -81,3 +81,40 @@ udevadm control --reload-rules
 udevadm trigger --subsystem-match=block
 
 echo "==> I/O scheduler modules installed and active"
+
+# ---- Legacy GCN amdgpu driver enforcement --------------------------------
+# 04-configure.sh enables CONFIG_DRM_AMDGPU_SI/CIK when gaming_tweaks=yes,
+# but per the kernel's own Kconfig help text (drivers/gpu/drm/amd/amdgpu/
+# Kconfig), that support is "disabled by default and still provided by
+# radeon" - compiling it in changes nothing on its own. amdgpu only takes
+# over Southern/Sea Islands (GCN 1.0/1.1) cards if radeon is told to back
+# off and amdgpu is told to take over, via module options.
+AMDGPU_LEGACY_FILE="/etc/modprobe.d/99-amdgpu-legacy.conf"
+NEED_INITRAMFS="no"
+if [[ "${gaming_tweaks:-yes}" == "yes" ]]; then
+    echo "==> Enforcing amdgpu (not radeon) for legacy GCN 1.0/1.1 cards"
+    cat > "$AMDGPU_LEGACY_FILE" <<'EOF'
+# Managed by debian-kernel-builder (gaming_tweaks=yes in kbuild.conf).
+# CONFIG_DRM_AMDGPU_SI/CIK alone doesn't switch the driver - the kernel's
+# own Kconfig says this support "is disabled by default and still
+# provided by radeon" without these module options. Only affects systems
+# that actually have a Southern/Sea Islands (GCN 1.0/1.1) card; harmless
+# no-op otherwise since neither option does anything on unrelated hardware.
+options radeon si_support=0 cik_support=0
+options amdgpu si_support=1 cik_support=1
+EOF
+    NEED_INITRAMFS="yes"
+elif [[ -f "$AMDGPU_LEGACY_FILE" ]]; then
+    echo "==> gaming_tweaks=no, removing amdgpu legacy driver-enforcement config"
+    rm -f "$AMDGPU_LEGACY_FILE"
+    NEED_INITRAMFS="yes"
+fi
+
+if [[ "$NEED_INITRAMFS" == "yes" ]]; then
+    # radeon/amdgpu are commonly loaded very early (initramfs, for KMS
+    # before the boot splash), so the option has to be baked into the
+    # initramfs too - a live modprobe reload isn't enough to change which
+    # driver claims the card at next boot.
+    echo "==> Updating initramfs so the driver option applies at early boot"
+    update-initramfs -u
+fi

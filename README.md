@@ -175,9 +175,15 @@ toggle rather than five separate ones:
   SteamOS/Fedora, to stop Proton/Wine mmap-exhaustion crashes.
 - **Transparent Hugepages = always** - cuts page fault/TLB overhead for
   gaming and memory-heavy workloads.
-- **Legacy GCN Vulkan support** - `CONFIG_DRM_AMDGPU_SI`/`_CIK`, so older
-  Radeon HD 7000/8000/R7/R9 cards use `amdgpu` (Vulkan/RADV) instead of
-  the legacy `radeon` driver.
+- **Legacy GCN Vulkan support** - `CONFIG_DRM_AMDGPU_SI`/`_CIK`, plus
+  `06-postinstall.sh` installing `/etc/modprobe.d/99-amdgpu-legacy.conf`
+  (`radeon.si_support=0 radeon.cik_support=0 amdgpu.si_support=1
+  amdgpu.cik_support=1`) and refreshing the initramfs, so older Radeon HD
+  7000/8000/R7/R9 cards actually get claimed by `amdgpu` (Vulkan/RADV) at
+  boot instead of `radeon`. The Kconfig options alone don't do this - see
+  the kernel's own `drivers/gpu/drm/amd/amdgpu/Kconfig` help text, which
+  says SI/CIK support in amdgpu "is disabled by default and still
+  provided by radeon" without the module options.
 
 `acs_override=yes` is kept separate because it's a real trade-off, not a
 free win: it applies `pcie_acs_override=downstream,multifunction` to split
@@ -201,6 +207,7 @@ behavior on its own:
 | Transparent Hugepages | `CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS=y` (compile-time promotion policy) | `tmpfiles-thp.conf`/`tmpfiles-thp-shrinker.conf` tune the separate runtime `defrag`/shrinker knobs | Complementary - different knobs, no overlap |
 | sched-ext | `CONFIG_SCHED_CLASS_EXT` and friends on `>= 6.12` | `scx-scheds`/`scx-switcher`/`scx-tools` packages depend on exactly this | debforge's scx packages need this tool's kernel (or any kernel with the same config) to function |
 | Kernel package | builds `linux-image-<version><localversion>` from source | `step_kernel.go` installs stock `linux-image-amd64` from Debian backports | Different package names, both can be installed side by side; whichever you boot into (GRUB) is the one that's active |
+| Legacy GCN (AMDGPU SI/CIK) | `CONFIG_DRM_AMDGPU_SI`/`_CIK` + `/etc/modprobe.d/99-amdgpu-legacy.conf` forcing `amdgpu` over `radeon` (`gaming_tweaks=yes`) | No equivalent - debforge doesn't touch AMD GPU driver selection | This tool owns it outright; nothing to defer to or conflict with |
 
 Why BFQ and Kyber are modules and not built directly into the kernel: a
 built-in scheduler can't be `modprobe`'d, so debforge's
