@@ -16,9 +16,8 @@
 # to it entirely - don't install a second copy of the same thing. If it
 # ISN'T present (or its config-system package hasn't been applied), install
 # a self-contained equivalent so users who never touch debforge still get
-# bfq/kyber loaded and assigned per-device out of the box, matching what
-# debforge would have set up. Either way, the same behavior: bfq for
-# rotational/SD storage, kyber for SATA SSDs, none for NVMe.
+# the same per-device policy out of the box: BFQ for rotational SATA,
+# mq-deadline for SATA SSDs/eMMC, and Kyber for NVMe.
 set -euo pipefail
 
 MANAGE="${manage_io_schedulers:-yes}"
@@ -33,7 +32,7 @@ OWN_MODULES_FILE="/etc/modules-load.d/90-kernel-builder-schedulers.conf"
 OWN_UDEV_FILE="/etc/udev/rules.d/60-kernel-builder-scheduler.rules"
 
 if [[ -f "$DEBFORGE_MODULES_FILE" || -f "$DEBFORGE_UDEV_FILE" ]]; then
-    echo "==> debforge's config-system already manages BFQ/Kyber loading ($DEBFORGE_MODULES_FILE) - deferring to it"
+    echo "==> debforge's config-system already manages the I/O scheduler policy ($DEBFORGE_MODULES_FILE) - deferring to it"
     # Clean up our own files if a *previous* build wrote them before
     # debforge was set up, so there's exactly one copy of this config
     # managing the system, not two redundant ones.
@@ -41,7 +40,7 @@ if [[ -f "$DEBFORGE_MODULES_FILE" || -f "$DEBFORGE_UDEV_FILE" ]]; then
         echo "    Removing this tool's own copy - debforge now owns it"
         rm -f "$OWN_MODULES_FILE" "$OWN_UDEV_FILE"
         udevadm control --reload-rules
-        udevadm trigger
+        udevadm trigger --subsystem-match=block
     fi
     exit 0
 fi
@@ -51,7 +50,8 @@ echo "==> No system config tool managing I/O scheduler modules - installing a se
 cat > "$OWN_MODULES_FILE" <<'EOF'
 # Managed by debian-kernel-builder (manage_io_schedulers=yes in kbuild.conf).
 # Loads the BFQ and Kyber I/O scheduler modules built by 04-configure.sh
-# (CONFIG_IOSCHED_BFQ=m, CONFIG_MQ_IOSCHED_KYBER=m). If debforge
+# (CONFIG_IOSCHED_BFQ=m, CONFIG_MQ_IOSCHED_KYBER=m). mq-deadline is built
+# into the kernel and needs no module load. If debforge
 # (github.com/hmwassim/debforge) is set up on this system, its own
 # /etc/modules-load.d/storage-schedulers.conf takes over this job instead
 # and this file is removed automatically on the next kernel build.
@@ -61,17 +61,17 @@ EOF
 
 cat > "$OWN_UDEV_FILE" <<'EOF'
 # Managed by debian-kernel-builder (manage_io_schedulers=yes in kbuild.conf).
-# Same per-device-type policy debforge's config-system uses: BFQ for
-# rotational/SD storage (best latency under load on slow media), Kyber for
-# SATA SSDs, and "none" for NVMe (the drive/host controller already does
-# its own low-latency queuing, so a software scheduler on top only adds
-# overhead). If debforge is set up on this system, its own
+# Same per-device policy debforge's config-system uses: BFQ for rotational
+# SATA disks, mq-deadline for SATA SSDs and eMMC, and Kyber for NVMe.
+# If debforge is set up on this system, its own
 # /etc/udev/rules.d/60-scheduler.rules takes over this job instead and
 # this file is removed automatically on the next kernel build.
-ACTION=="add|change", SUBSYSTEM=="block", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
-ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="mmcblk?", ATTR{queue/scheduler}="bfq"
-ACTION=="add|change", SUBSYSTEM=="block", ATTR{queue/rotational}=="0", KERNEL=="nvme?n?", ATTR{queue/scheduler}="none"
-ACTION=="add|change", SUBSYSTEM=="block", ATTR{queue/rotational}=="0", KERNEL=="sd?", ATTR{queue/scheduler}="kyber"
+ACTION=="add|change", KERNEL=="sd[a-z]*", ATTR{queue/rotational}=="1", \
+    ATTR{queue/scheduler}="bfq"
+ACTION=="add|change", KERNEL=="sd[a-z]*|mmcblk[0-9]*", ATTR{queue/rotational}=="0", \
+    ATTR{queue/scheduler}="mq-deadline"
+ACTION=="add|change", KERNEL=="nvme[0-9]*", ATTR{queue/rotational}=="0", \
+    ATTR{queue/scheduler}="kyber"
 EOF
 
 echo "==> Loading modules and applying scheduler assignment now (no reboot needed)"

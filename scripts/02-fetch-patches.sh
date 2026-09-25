@@ -41,14 +41,14 @@ case "$scheduler" in
         echo "==> eevdf is the kernel's default on $kernel_version, no patch needed"
         ;;
     bore)
-        wget -nv -O "$PATCH_DIR/scheduler.patch" "$BASE_URL/sched/0001-bore.patch" || {
+        wget --progress=bar:force:noscroll -O "$PATCH_DIR/scheduler.patch" "$BASE_URL/sched/0001-bore.patch" || {
             echo "ERROR: no bore patch published for kernel $MAJOR_MINOR." >&2
             echo "Check: https://github.com/CachyOS/kernel-patches/tree/master/${MAJOR_MINOR}/sched" >&2
             exit 1
         }
         ;;
     pds|bmq)
-        wget -nv -O "$PATCH_DIR/scheduler.patch" "$BASE_URL/sched/0001-prjc-cachy.patch" || {
+        wget --progress=bar:force:noscroll -O "$PATCH_DIR/scheduler.patch" "$BASE_URL/sched/0001-prjc-cachy.patch" || {
             echo "ERROR: no pds/bmq (prjc) patch published for kernel $MAJOR_MINOR." >&2
             echo "Check: https://github.com/CachyOS/kernel-patches/tree/master/${MAJOR_MINOR}/sched" >&2
             exit 1

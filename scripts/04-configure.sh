@@ -155,11 +155,13 @@ if [[ "${gaming_tweaks:-no}" == "yes" ]]; then
 fi
 
 # ---- Interactive I/O schedulers ------------------------------------------
-# Modules, not built-in, same reason as NTSYNC above. BFQ_GROUP_IOSCHED
+# Keep mq-deadline built in for the SATA/eMMC policy. BFQ_GROUP_IOSCHED
 # stays -e: it's a bool, not tristate, so it just rides along with BFQ.
-# See README > debforge compatibility, and manage_io_schedulers/
-# 06-postinstall.sh for what actually loads/assigns them at install time.
-scripts/config -m IOSCHED_BFQ -e BFQ_GROUP_IOSCHED -m MQ_IOSCHED_KYBER
+# BFQ and Kyber remain modules so debforge's modules-load setup can load
+# them; mq-deadline needs no module load. See README > debforge
+# compatibility, and manage_io_schedulers/06-postinstall.sh for what
+# actually loads/assigns them at install time.
+scripts/config -e MQ_IOSCHED_DEADLINE -m IOSCHED_BFQ -e BFQ_GROUP_IOSCHED -m MQ_IOSCHED_KYBER
 
 make "${TOOLCHAIN_ARGS[@]}" olddefconfig
 
@@ -208,6 +210,13 @@ fi
 if ! grep -q "^CONFIG_${WANT_PREEMPT}=y" .config; then
     echo "ERROR: preempt=$preempt (CONFIG_$WANT_PREEMPT) did not stick after olddefconfig." >&2
     echo "This kernel_version/arch combination may not support it." >&2
+    exit 1
+fi
+
+# mq-deadline is the fixed fallback policy for SATA SSDs and eMMC, so do
+# not let a Kconfig dependency silently remove it from the generated image.
+if ! grep -q '^CONFIG_MQ_IOSCHED_DEADLINE=y$' .config; then
+    echo "ERROR: CONFIG_MQ_IOSCHED_DEADLINE did not stick after olddefconfig." >&2
     exit 1
 fi
 

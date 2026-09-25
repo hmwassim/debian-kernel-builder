@@ -31,7 +31,7 @@ if [[ -d "$SRC_DIR" ]]; then
 fi
 
 echo "==> Fetching kernel source: $URL"
-if ! wget -nv -O "$WORK_DIR/$TARBALL" "$URL"; then
+if ! wget --progress=bar:force:noscroll -O "$WORK_DIR/$TARBALL" "$URL"; then
     echo "ERROR: could not download $TARBALL from kernel.org." >&2
     echo "Check that $kernel_version is a real released version: https://kernel.org" >&2
     exit 1
@@ -52,7 +52,7 @@ if [[ "${verify_signature:-yes}" == "yes" ]]; then
     }
 
     echo "==> Fetching signature: $SIG_URL"
-    wget -nv -O "$WORK_DIR/$SIGFILE" "$SIG_URL"
+    wget --progress=bar:force:noscroll -O "$WORK_DIR/$SIGFILE" "$SIG_URL"
 
     # Long key IDs (last 16 hex digits of each fingerprint) for Linus
     # Torvalds and Greg Kroah-Hartman, the two kernel.org release

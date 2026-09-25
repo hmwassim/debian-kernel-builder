@@ -42,9 +42,9 @@ sudo dpkg -i output/*.deb
 4. **Build** - runs `make bindeb-pkg` with `KCFLAGS=-march=<cpu>` and
    collects the resulting `.deb` files into `output/`.
 5. **Install & activate** - `build.sh` installs the resulting `.deb`, then
-   runs `scripts/06-postinstall.sh` to load and assign the BFQ/Kyber I/O
-   scheduler modules built in step 3 (unless [debforge](#debforge-compatibility)
-   is already doing that, or `manage_io_schedulers=no`).
+   runs `scripts/06-postinstall.sh` to configure the I/O scheduler policy
+   (unless [debforge](#debforge-compatibility) is already doing that, or
+   `manage_io_schedulers=no`).
 
 ## Configuration
 
@@ -65,7 +65,7 @@ All settings are in `kbuild.conf`.
 | `verify_signature` | `yes`/`no` | Verifies the tarball against kernel.org's PGP signature; default `yes` |
 | `gaming_tweaks` | `yes`/`no` | Bundle of Solus-ported tweaks - see [below](#gaming-tweaks); default `yes` |
 | `acs_override` | `yes`/`no` | Adds PCIe ACS Override patch for VFIO IOMMU group separation; default `no` |
-| `manage_io_schedulers` | `yes`/`no` | Loads & assigns the BFQ/Kyber I/O scheduler modules per-device after install, unless [debforge](#debforge-compatibility) is already doing it; default `yes` |
+| `manage_io_schedulers` | `yes`/`no` | Configures the BFQ/mq-deadline/Kyber I/O scheduler policy after install, unless [debforge](#debforge-compatibility) is already doing it; default `yes` |
 
 
 ### CPU targeting
@@ -196,18 +196,19 @@ behavior on its own:
 | Feature | This tool (kernel build) | debforge (system config) | Result |
 |---|---|---|---|
 | NTSYNC | `CONFIG_NTSYNC=m` unconditionally on `>= 6.14` | `wine.yaml` modprobes it + a udev rule | Module loads at boot either way |
-| BFQ / Kyber I/O schedulers | `CONFIG_IOSCHED_BFQ=m`, `CONFIG_MQ_IOSCHED_KYBER=m` (never built-in; `BFQ_GROUP_IOSCHED` is a `bool` sub-option that just follows BFQ into the module) | `config-system.yaml` modprobes both + assigns per-device via udev | If debforge's files exist, this tool defers to them entirely. If not, `06-postinstall.sh` installs its own equivalent modules-load + udev rule (same policy: bfq for rotational/SD, kyber for SATA SSD, none for NVMe) so it still works without debforge. Controlled by `manage_io_schedulers` |
+| I/O schedulers | `CONFIG_MQ_IOSCHED_DEADLINE=y`, `CONFIG_IOSCHED_BFQ=m`, `CONFIG_MQ_IOSCHED_KYBER=m` | `config-system.yaml` loads BFQ/Kyber and assigns mq-deadline/BFQ/Kyber per-device via udev | If debforge's files exist, this tool defers to them entirely. If not, `06-postinstall.sh` installs the same policy: BFQ for rotational SATA, mq-deadline for SATA/eMMC, and Kyber for NVMe. Controlled by `manage_io_schedulers` |
 | `vm.max_map_count` | kernel *default* raised to `INT_MAX - 5` via patch (`gaming_tweaks=yes`) | `config-system.yaml` sets the same value via `/etc/sysctl.d/99-debforge.conf` | Redundant but harmless together; the kernel default alone already covers users without debforge |
 | Transparent Hugepages | `CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS=y` (compile-time promotion policy) | `tmpfiles-thp.conf`/`tmpfiles-thp-shrinker.conf` tune the separate runtime `defrag`/shrinker knobs | Complementary - different knobs, no overlap |
 | sched-ext | `CONFIG_SCHED_CLASS_EXT` and friends on `>= 6.12` | `scx-scheds`/`scx-switcher`/`scx-tools` packages depend on exactly this | debforge's scx packages need this tool's kernel (or any kernel with the same config) to function |
 | Kernel package | builds `linux-image-<version><localversion>` from source | `step_kernel.go` installs stock `linux-image-amd64` from Debian backports | Different package names, both can be installed side by side; whichever you boot into (GRUB) is the one that's active |
 
-Why BFQ/Kyber are modules and not built directly into the kernel: a
+Why BFQ and Kyber are modules and not built directly into the kernel: a
 built-in scheduler can't be `modprobe`'d, so debforge's
 `/etc/modules-load.d/storage-schedulers.conf` would fail every boot with a
 "module not found" error from `systemd-modules-load.service` - annoying,
 not harmful, but avoidable. Building them as modules keeps debforge's
-modprobe working, and `06-postinstall.sh` covers the case where debforge
+modprobe working. mq-deadline is built in because it is the fixed policy
+for SATA SSDs and eMMC. `06-postinstall.sh` covers the case where debforge
 isn't installed at all.
 
 ### Custom User Patches
